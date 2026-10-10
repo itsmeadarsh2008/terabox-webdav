@@ -15,22 +15,20 @@ try {
   // .env is optional; environment wins.
 }
 
-// "Label|https://..." entries, comma-separated. Label becomes the top-level
-// collection; bare URLs get an indexed fallback name.
-function parseShares() {
-  const raw = (process.env.TERABOX_SHARES ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return raw.map((entry, i) => {
-    const bar = entry.indexOf("|");
-    if (bar > 0) return { label: entry.slice(0, bar).trim() || `share-${i + 1}`, url: entry.slice(bar + 1).trim() };
-    return { label: `share-${i + 1}`, url: entry };
-  }).filter((s) => s.url);
-}
-
 export const config = {
   PORT: Number(process.env.PORT ?? 8086),
   DAV_USER: process.env.DAV_USER ?? "",
   DAV_PASS: process.env.DAV_PASS ?? "",
-  GATEWAY_URL: (process.env.TERABOX_GATEWAY_URL ?? "http://localhost:5000").replace(/\/$/, ""),
-  SHARES: parseShares(),
-  PROXY_MODE: (process.env.PROXY_MODE ?? "redirect") === "pipe" ? "pipe" : "redirect",
+  // rclone storage backend (TeraBox remote). RCLONE_CONFIG points at a file
+  // holding the terabox remote (ndus cookie); RCLONE_REMOTE names it.
+  RCLONE_BIN: process.env.RCLONE_BIN ?? "rclone",
+  RCLONE_CONFIG: process.env.RCLONE_CONFIG ?? "",
+  RCLONE_REMOTE: process.env.RCLONE_REMOTE ?? "terabox:",
+  RCLONE_TIMEOUT_MS: Number(process.env.RCLONE_TIMEOUT_MS ?? 60000),
+  // Remote root exposed as WebDAV `/`.
+  BASE_PATH: (process.env.RCLONE_BASE_PATH ?? "/").replace(/\/+$/, "") || "/",
+  // JSON file persisting locks + dead props across restarts (empty = memory).
+  PROP_STORE: process.env.PROP_STORE ?? "",
+  // Cap granted lock lifetimes (seconds).
+  LOCK_TIMEOUT_MAX: Number(process.env.LOCK_TIMEOUT_MAX ?? 86400),
 };
