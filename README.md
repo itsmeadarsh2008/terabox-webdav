@@ -1,64 +1,72 @@
-# terabox-webdav — TeraBox shares as a WebDAV drive
+# terabox-webdav — TeraBox account as a full WebDAV drive
 
-A zero-dependency Node WebDAV frontend for TeraBox. It exposes your TeraBox
-**share URLs** as browsable collections and playable files by talking to
-[terabox-gateway](https://github.com/saahiyo/terabox-gateway) — which holds
-your TeraBox login. This server never sees your TeraBox credentials.
+A zero-dependency Node WebDAV server (complete RFC 4918: every verb) backed by
+an [rclone](https://github.com/gulp79/rclone-extra) `terabox` remote. Your
+TeraBox account appears as a plain drive: browse, stream with seeking, upload,
+rename, delete, lock — from any WebDAV client. This box holds no bytes.
 
 ```
-WebDAV client ──HTTPS + basic-auth──► terabox-webdav ──► terabox-gateway ──► TeraBox
-                                       (this repo)          (ndus cookie lives here)
+WebDAV client ──HTTPS + basic-auth──► terabox-webdav ──rclone CLI──► TeraBox
+                                       (this repo)      (ndus cookie)
 ```
 
 ## Quickstart
 
 ```bash
-cp .env.example .env   # set TERABOX_SHARES at minimum
+# 1. rclone with a terabox remote (see soulseek-addon/deploy/terabox-setup.sh)
+#    — needs your TeraBox ndus cookie (terabox.com → F12 → Application → Cookies)
+cp .env.example .env   # set RCLONE_CONFIG + RCLONE_REMOTE at minimum
 node src/server.js     # :8086
 npm test
 ```
 
 ```bash
 # .env
-TERABOX_GATEWAY_URL=http://localhost:5000
-TERABOX_SHARES=Music|https://teraboxshare.com/s/XXXX,https://terabox.com/s/YYYY
+RCLONE_BIN=rclone
+RCLONE_CONFIG=/root/.config/rclone/rclone.conf
+RCLONE_REMOTE=terabox:
+RCLONE_BASE_PATH=/
 DAV_USER=slsk
 DAV_PASS=change-me
 ```
 
-## How it works
+## What's supported
 
-- **Catalog:** `TERABOX_SHARES` entries (`Label|url`) become top-level
-  collections (`/Music/`). No search — matching happens in the client
-  (or in frontends like the soulseek-addon TeraBox backend).
-- **`PROPFIND /`** lists collections; **`PROPFIND /Label/`** lists that
-  share's files live from the gateway (name + size).
-- **`GET /Label/file`** → `302` to the gateway short link by default
-  (**redirect mode**: zero bandwidth through this box; clients follow it,
-  ranges intact). Set `PROXY_MODE=pipe` to stream bytes through the server
-  with Range forwarding instead (costs bandwidth, hides origins).
-- **`HEAD`** exposes type + length for players that probe before playing.
-- Write methods (`PUT/DELETE/MKCOL/…`) → `501`. Read-only by design.
-- Unauthenticated requests → `401` whenever `DAV_USER` is set.
+| Method | Behavior |
+|---|---|
+| `OPTIONS` | `DAV: 1, 2` + full `Allow` list |
+| `PROPFIND` | Depth 0/1 (infinity refused: unbounded walks over a network remote); `allprop`, `propname`, named props incl. dead props, `getetag`, locks |
+| `GET` / `HEAD` | Byte ranges via `rclone cat --offset/--count`; correct MIME + `Accept-Ranges`; `416` on bad ranges |
+| `PUT` | streamed upload (`rcat`); `201` new / `204` overwrite; `If-None-Match: *` → `412` if exists |
+| `DELETE` | file or recursive collection; root protected |
+| `MKCOL` | `201` / `405` exists / `409` missing parent / `415` non-empty body |
+| `COPY` / `MOVE` | same-host `Destination` only (SSRF guard); `Overwrite: F` → `412`; collections need `Depth: infinity` |
+| `LOCK` / `UNLOCK` | exclusive + shared, owner, timeout (capped), refresh via `If`, `423` with lock info on conflict |
+| `PROPPATCH` | dead props set/remove (`207` per-prop); live `DAV:` props → `403` |
+| Preconditions | `If` header (lock tokens + etags): `423` locked, `412` failed |
+
+Locks + dead props live in-process (single instance owns them), optionally
+persisted to `PROP_STORE` JSON across restarts.
 
 ## Clients
 
-Any WebDAV client: Solid/Cx File Explorer (Android), Finder → Connect to
-Server (Mac), `rclone`/`davfs2` (Linux), mpv/VLC (direct file URLs).
-Behind Caddy for public HTTPS + an extra basic-auth layer, same pattern as:
+Solid/Cx File Explorer (Android), Finder → Connect to Server (Mac),
+`rclone`/`davfs2` (Linux), mpv/VLC (direct file URLs). Behind Caddy for
+public HTTPS + an extra basic-auth layer:
 
 ```caddy
 handle /tb/* {
-    basicauth { <user> <bcrypt-hash> }
+    basicauth { <user> <bcrypt-hash> }   # caddy hash-password
     uri strip_prefix /tb
     reverse_proxy 127.0.0.1:8086
 }
 ```
 
-## Limits
+## Limits (honest)
 
-- Playback depends on the gateway + TeraBox links (they expire; each `GET`
-  uses a fresh short link, so expiry is invisible).
-- Free-account TeraBox speeds apply upstream (~1.5–3MB/s per file).
-- Large share listings are live API calls — first PROPFIND on a huge folder
-  takes seconds; no local index (yet).
+- Every op shells to rclone (~200–500ms each) — fine for files, not for
+  thousands-of-files sync tools.
+- Free-account TeraBox: ~1.5–3MB/s per file; session/key expiry mid-mount
+  happens upstream — retries + re-auth surface as 502s, refresh the cookie.
+- No `Depth: infinity` PROPFIND (refused 403); clients paginate depth:1.
+- Single-instance locks: don't run two servers against one remote.
