@@ -1,0 +1,15 @@
+{
+  "name": "terabox-webdav",
+  "version": "0.1.0",
+  "description": "WebDAV frontend for TeraBox shares (via terabox-gateway)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/"
+  },
+  "license": "MIT"
+}
